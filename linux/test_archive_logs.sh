@@ -1,40 +1,16 @@
 #!/bin/bash
-PATH="$PATH:/usr/sbin:/sbin"
 unset LAB1_MAX_COMPRESSION
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
-this_script="$script_dir/$(basename "$0")"
 main_script="$script_dir/archive_logs.sh"
 
-if [ "$LAB1_IN_NAMESPACE" != "1" ]; then
-    probe_dir=$(mktemp -d)
-    if unshare --map-root-user --mount mount -t tmpfs tmpfs "$probe_dir" 2> /dev/null; then
-        rmdir "$probe_dir"
-        export LAB1_IN_NAMESPACE=1
-        exec unshare --map-root-user --mount bash "$this_script"
-    fi
-    rmdir "$probe_dir"
-fi
-
 work_dir=$(mktemp -d)
-disk_image="$work_dir/disk.img"
 disk_dir="$work_dir/disk"
 mkdir "$disk_dir"
-
-disk_method=""
-loop_device=""
+disk_mounted=0
 
 cleanup() {
-    if [ "$disk_method" = "tmpfs" ]; then
-        umount "$disk_dir"
-    fi
-    if [ "$disk_method" = "udisks" ]; then
-        udisksctl unmount --no-user-interaction -b "$loop_device" > /dev/null
-    fi
-    if [ -n "$loop_device" ]; then
-        udisksctl loop-delete --no-user-interaction -b "$loop_device" > /dev/null
-    fi
-    if [ "$disk_method" = "sudo" ]; then
+    if [ "$disk_mounted" = "1" ]; then
         sudo umount "$disk_dir"
     fi
     rm -rf "$work_dir"
@@ -42,50 +18,13 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 1' INT TERM
 
-mount_with_udisks() {
-    loop_device=$(udisksctl loop-setup --no-user-interaction -f "$disk_image" 2> /dev/null | grep -o '/dev/loop[0-9]*')
-    if [ -z "$loop_device" ]; then
-        return 1
-    fi
-
-    udisksctl mount --no-user-interaction -b "$loop_device" > /dev/null 2>&1
-
-    for attempt in 1 2 3 4 5; do
-        mount_point=$(findmnt -n -o TARGET --source "$loop_device")
-        if [ -n "$mount_point" ]; then
-            disk_dir="$mount_point"
-            return 0
-        fi
-        sleep 1
-    done
-    return 1
-}
-
-if [ "$LAB1_IN_NAMESPACE" = "1" ]; then
-    if mount -t tmpfs -o size=1G tmpfs "$disk_dir"; then
-        disk_method="tmpfs"
-        echo "Virtual disk: 1 GB tmpfs in a user namespace (no root)"
-    fi
-else
-    truncate -s 1G "$disk_image"
-    mkfs.ext4 -q -F -m 0 -E root_owner="$(id -u):$(id -g)" "$disk_image"
-
-    if mount_with_udisks; then
-        disk_method="udisks"
-        echo "Virtual disk: 1 GB ext4 image mounted with udisksctl (no root) at $disk_dir"
-    else
-        echo "Cannot create a disk without root, trying sudo mount (may ask for a password)"
-        if sudo mount -o loop "$disk_image" "$disk_dir"; then
-            disk_method="sudo"
-            echo "Virtual disk: 1 GB ext4 image mounted with sudo at $disk_dir"
-        fi
-    fi
-fi
-
-if [ -z "$disk_method" ]; then
+echo "Creating a 1 GB virtual disk (sudo may ask for your password)"
+if ! sudo mount -t tmpfs -o size=1G,uid=$(id -u),gid=$(id -g) tmpfs "$disk_dir"; then
     echo "Error: cannot create a virtual disk" >&2
     exit 1
 fi
+disk_mounted=1
+echo "Virtual disk: 1 GB tmpfs at $disk_dir"
 
 log_dir="$disk_dir/log"
 backup_dir="$work_dir/backup"
