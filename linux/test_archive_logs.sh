@@ -102,6 +102,12 @@ check_usage_below() {
     fi
 }
 
+check_output_contains() {
+    if ! grep -q -F -- "$1" "$output_file"; then
+        fail "output does not contain '$1'"
+    fi
+}
+
 check_no_archive() {
     if [ "$(ls "$backup_dir" | wc -l)" -ne 0 ]; then
         fail "an archive was created but should not have been"
@@ -159,10 +165,10 @@ check_archive() {
 
 finish_test() {
     if [ "$test_failed" -eq 0 ]; then
-        echo "    OK"
+        echo "    true"
         tests_passed=$(( tests_passed + 1 ))
     else
-        echo "    FAILED, archive_logs.sh output:"
+        echo "    false, archive_logs.sh output:"
         while IFS= read -r line; do
             echo "    | $line"
         done < "$output_file"
@@ -176,6 +182,7 @@ create_log_files 8
 show_log_size
 run_main_script "$log_dir" 70 "$backup_dir"
 check_exit_code 0
+check_output_contains "Folder limit: $(( disk_total_kb / 1024 )) MB"
 check_no_archive
 check_files_left 8
 finish_test
@@ -190,25 +197,24 @@ check_archive gz app_10.log app_09.log
 check_files_left 8
 finish_test
 
-start_test "one big old file - only it is archived"
-create_file "$log_dir/huge.log" $(( file_kb * 30 / 8 )) 30
-create_log_files 6
+start_test "threshold 100% - nothing to do"
+create_log_files 10
 show_log_size
-run_main_script "$log_dir" 70 "$backup_dir"
+run_main_script "$log_dir" 100 "$backup_dir"
 check_exit_code 0
-check_usage_below 70
-check_archive gz huge.log
-check_files_left 6
+check_no_archive
+check_files_left 10
 finish_test
 
-start_test "other threshold: 55%"
-create_log_files 8
+start_test "wrong threshold (101, -5, abc) - error, nothing changed"
+create_log_files 10
 show_log_size
-run_main_script "$log_dir" 55 "$backup_dir"
-check_exit_code 0
-check_usage_below 55
-check_archive gz app_08.log app_07.log
-check_files_left 6
+for wrong_threshold in 101 -5 abc; do
+    run_main_script "$log_dir" "$wrong_threshold" "$backup_dir"
+    check_exit_code 1
+done
+check_no_archive
+check_files_left 10
 finish_test
 
 start_test "LAB1_MAX_COMPRESSION=1 - lzma compression"

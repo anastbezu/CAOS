@@ -9,6 +9,7 @@ get_disk_usage() {
     disk_line=$(df -P -k "$log_dir" | tail -n 1)
     disk_total_kb=$(echo "$disk_line" | awk '{print $2}')
     disk_used_kb=$(echo "$disk_line" | awk '{print $3}')
+    mount_point=$(echo "$disk_line" | awk '{print $6}')
 }
 
 percent() {
@@ -33,11 +34,11 @@ if [ -z "$threshold" ]; then
     threshold=70
 fi
 
-if ! echo "$threshold" | grep -q -x '[1-9][0-9]*'; then
-    error_exit "threshold must be a whole number from 1 to 99, got '$threshold'"
+if ! echo "$threshold" | grep -q -x -E '0|[1-9][0-9]*'; then
+    error_exit "threshold must be a whole number from 0 to 100, got '$threshold'"
 fi
-if [ "$threshold" -gt 99 ]; then
-    error_exit "threshold must be a whole number from 1 to 99, got '$threshold'"
+if [ "$threshold" -gt 100 ]; then
+    error_exit "threshold must be a whole number from 0 to 100, got '$threshold'"
 fi
 
 if [ -z "$backup_dir" ]; then
@@ -48,8 +49,12 @@ get_disk_usage
 limit_kb=$(( disk_total_kb * threshold / 100 ))
 usage_before=$(percent "$disk_used_kb" "$disk_total_kb")
 
-echo "Folder:      $log_dir"
-echo "Disk usage:  $(( disk_used_kb / 1024 )) MB of $(( disk_total_kb / 1024 )) MB ($usage_before%), threshold $threshold%"
+echo "Folder:       $log_dir"
+echo "Folder limit: $(( disk_total_kb / 1024 )) MB (filesystem mounted at $mount_point)"
+if [ "$mount_point" = "/" ]; then
+    echo "Warning: $log_dir is not on a separate filesystem, its limit is the whole system disk" >&2
+fi
+echo "Disk usage:   $(( disk_used_kb / 1024 )) MB of $(( disk_total_kb / 1024 )) MB ($usage_before%), threshold $threshold%"
 
 if [ "$disk_used_kb" -le "$limit_kb" ]; then
     echo "Below threshold, nothing to do."
@@ -110,16 +115,16 @@ if ! tar -c "$compress_option" -f "$archive_path" -C "$log_dir" -- "${files_to_a
 fi
 
 archive_kb=$(du -k "$archive_path" | cut -f 1)
-echo "Archive:     $archive_path ($(( archive_kb / 1024 )) MB)"
+echo "Archive:      $archive_path ($(( archive_kb / 1024 )) MB)"
 
 for file_name in "${files_to_archive[@]}"; do
     rm -f "$log_dir/$file_name"
 done
-echo "Deleted:     $files_count file(s)"
+echo "Deleted:      $files_count file(s)"
 
 get_disk_usage
 usage_after=$(percent "$disk_used_kb" "$disk_total_kb")
-echo "Disk usage:  $usage_before% -> $usage_after%"
+echo "Disk usage:   $usage_before% -> $usage_after%"
 
 if [ "$disk_used_kb" -gt "$limit_kb" ]; then
     echo "Warning: still above $threshold%, the rest of the space is used outside $log_dir" >&2
